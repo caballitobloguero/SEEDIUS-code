@@ -1,0 +1,2117 @@
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system';
+import * as Haptics from 'expo-haptics';
+import * as ImagePicker from 'expo-image-picker';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useEffect, useRef, useState } from 'react';
+import {
+  Animated, BackHandler, Dimensions,
+  Image,
+  Modal,
+  PanResponder,
+  Platform,
+  SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
+
+const STORAGE_KEY_ONBOARDING = '@seedius_has_completed_onboarding';
+const STORAGE_KEY_USERNAME = '@seedius_username';
+const STORAGE_KEY_THEME = '@seedius_theme_dark';
+const STORAGE_KEY_PRODUCTS = '@seedius_products';
+const STORAGE_KEY_CATEGORIES = '@seedius_categories';
+const STORAGE_KEY_NOTES = '@seedius_notes_list';
+const STORAGE_KEY_HISTORY = '@seedius_daily_history';
+const STORAGE_KEY_MONEY = '@seedius_total_money';
+const STORAGE_KEY_PROFILE_IMG = '@seedius_profile_image';
+const STORAGE_KEY_HOURS = '@seedius_hours_of_day';
+
+export default function App() {
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState(false);
+  const [onboardingStep, setOnboardingStep] = useState(1);
+  const [setupUsername, setSetupUsername] = useState('Administrador');
+  const [setupThemeDark, setSetupThemeDark] = useState(true);
+  const [acceptedTerms, setAcceptedTerms] = useState(false);
+
+  // Estados del Tour Guiado
+  const [isTourActive, setIsTourActive] = useState(false);
+  const [tourStepIndex, setTourStepIndex] = useState(0);
+
+  const tourSteps = [
+    {
+      tab: 'home',
+      title: 'Panel Principal & Métricas',
+      desc: 'Aquí visualizas el rendimiento global de ventas en tiempo real con las velas horarias y alertas de estoc.'
+    },
+    {
+      tab: 'stock',
+      title: 'Inventario y Catálogo',
+      desc: 'Controla tus productos, añade nuevos elementos o edita categorías y precios con un toque o pulsación larga.'
+    },
+    {
+      tab: 'notes',
+      title: 'Bloc de Notas',
+      desc: 'Anota recordatorios importantes o apuntes rápidos del negocio organizados de forma segura.'
+    },
+    {
+      tab: 'profile',
+      title: 'Ajustes y Respaldo',
+      desc: 'Gestiona tu perfil, cambia entre Tema Oscuro/Claro y elimina o reinicia el historial completo de la app.'
+    }
+  ];
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [currentTab, setCurrentTab] = useState<'home' | 'stock' | 'notes' | 'profile' | 'sell' | 'lowStock' | 'fullHistory'>('home');
+  
+  const [isDarkMode, setIsDarkMode] = useState(true);
+
+  const [deviceHour, setDeviceHour] = useState(new Date().getHours());
+  const [currentDateString] = useState(() => {
+    const d = new Date();
+    return d.toISOString().split('T')[0];
+  });
+
+  const [selectedHistoryDate, setSelectedHistoryDate] = useState(new Date().toISOString().split('T')[0]);
+  
+  const [isCalendarModalVisible, setIsCalendarModalVisible] = useState(false);
+  const [calendarViewDate, setCalendarViewDate] = useState(new Date());
+
+  const sellScrollRef = useRef<ScrollView>(null);
+
+  const [products, setProducts] = useState<any[]>([]);
+  const [categories, setCategories] = useState<string[]>(['Alimentos', 'Accesorios']);
+  const [selectedCategoryFilter, setSelectedCategoryFilter] = useState<string>('TODAS');
+  const [isCategoryDropdownOpen, setIsCategoryDropdownOpen] = useState(false);
+
+  const [selectedSortOption, setSelectedSortOption] = useState<string>('Por Defecto');
+  const [isSortDropdownOpen, setIsSortDropdownOpen] = useState(false);
+
+  const [dailyHistoryLogs, setDailyHistoryLogs] = useState<{ [date: string]: any[] }>({});
+  const [totalMoneyEarned, setTotalMoneyEarned] = useState(0);
+
+  const [expandedProductId, setExpandedProductId] = useState<string | null>(null);
+  const [activeCandle, setActiveCandle] = useState<any | null>(null);
+
+  const particleAnim = useRef(new Animated.Value(0)).current;
+
+  // Animaciones para botones flotantes (+ y $)
+  const scaleAddBtn = useRef(new Animated.Value(1)).current;
+  const scaleSellBtn = useRef(new Animated.Value(1)).current;
+
+  const triggerButtonAnimation = (animValue: Animated.Value) => {
+    Animated.sequence([
+      Animated.timing(animValue, { toValue: 1.25, duration: 100, useNativeDriver: true }),
+      Animated.timing(animValue, { toValue: 1, duration: 100, useNativeDriver: true }),
+    ]).start();
+  };
+
+  useEffect(() => {
+    const animationLoop = Animated.loop(
+      Animated.timing(particleAnim, {
+        toValue: 1,
+        duration: 3000,
+        useNativeDriver: true,
+      })
+    );
+    animationLoop.start();
+    return () => animationLoop.stop();
+  }, [particleAnim]);
+
+  // Cargar datos persistidos al iniciar
+  useEffect(() => {
+    async function loadPersistedData() {
+      try {
+        const storedOnboarding = await AsyncStorage.getItem(STORAGE_KEY_ONBOARDING);
+        const storedUsername = await AsyncStorage.getItem(STORAGE_KEY_USERNAME);
+        const storedTheme = await AsyncStorage.getItem(STORAGE_KEY_THEME);
+        const storedProducts = await AsyncStorage.getItem(STORAGE_KEY_PRODUCTS);
+        const storedCategories = await AsyncStorage.getItem(STORAGE_KEY_CATEGORIES);
+        const storedNotes = await AsyncStorage.getItem(STORAGE_KEY_NOTES);
+        const storedHistory = await AsyncStorage.getItem(STORAGE_KEY_HISTORY);
+        const storedMoney = await AsyncStorage.getItem(STORAGE_KEY_MONEY);
+        const storedImg = await AsyncStorage.getItem(STORAGE_KEY_PROFILE_IMG);
+        const storedHours = await AsyncStorage.getItem(STORAGE_KEY_HOURS);
+
+        if (storedOnboarding === 'true') setHasCompletedOnboarding(true);
+        if (storedUsername) {
+          setSetupUsername(storedUsername);
+          setProfileName(storedUsername);
+        }
+        if (storedTheme !== null) {
+          const isDark = storedTheme === 'true';
+          setSetupThemeDark(isDark);
+          setIsDarkMode(isDark);
+        }
+        if (storedProducts) setProducts(JSON.parse(storedProducts));
+        if (storedCategories) setCategories(JSON.parse(storedCategories));
+        if (storedNotes) setNotesList(JSON.parse(storedNotes));
+        if (storedHistory) setDailyHistoryLogs(JSON.parse(storedHistory));
+        if (storedMoney) setTotalMoneyEarned(parseFloat(storedMoney) || 0);
+        if (storedImg) setProfileImage(storedImg);
+        if (storedHours) setHoursOfDay(JSON.parse(storedHours));
+      } catch (e) {
+        console.log('[SEEDIUS] Error cargando datos:', e);
+      } finally {
+        setTimeout(() => {
+          setIsLoading(false);
+        }, 1200);
+      }
+    }
+    loadPersistedData();
+  }, []);
+
+  const saveDataToStorage = async (key: string, value: any) => {
+    try {
+      const jsonValue = typeof value === 'string' ? value : JSON.stringify(value);
+      await AsyncStorage.setItem(key, jsonValue);
+    } catch (e) {
+      console.log('[SEEDIUS] Error guardando en almacenamiento:', e);
+    }
+  };
+
+  // Función para restablecer / borrar todo el historial desde los ajustes
+  const handleResetAppHistory = async () => {
+    try {
+      await AsyncStorage.multiRemove([
+        STORAGE_KEY_ONBOARDING,
+        STORAGE_KEY_USERNAME,
+        STORAGE_KEY_PRODUCTS,
+        STORAGE_KEY_CATEGORIES,
+        STORAGE_KEY_NOTES,
+        STORAGE_KEY_HISTORY,
+        STORAGE_KEY_MONEY,
+        STORAGE_KEY_PROFILE_IMG,
+        STORAGE_KEY_HOURS
+      ]);
+
+      setProducts([]);
+      setCategories(['Alimentos', 'Accesorios']);
+      setNotesList([]);
+      setDailyHistoryLogs({});
+      setTotalMoneyEarned(0);
+      setProfileImage(null);
+      setHoursOfDay(
+        Array.from({ length: 24 }, (_, index) => ({
+          hour: index,
+          sellCount: 0,
+          sellMoney: 0,
+        }))
+      );
+      setHasCompletedOnboarding(false);
+      setOnboardingStep(1);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+      showCustomToast("🧹 Historial y datos restablecidos por completo.");
+    } catch (e) {
+      console.log('[SEEDIUS] Error al restablecer:', e);
+    }
+  };
+
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [toastAction, setToastAction] = useState<(() => void) | null>(null);
+  const toastOpacity = useRef(new Animated.Value(0)).current;
+
+  const [isAddModalVisible, setIsAddModalVisible] = useState(false);
+  const [newProductName, setNewProductName] = useState('');
+  const [newProductPrice, setNewProductPrice] = useState('');
+  const [newProductCategory, setNewProductCategory] = useState('');
+  const [newProductStock, setNewProductStock] = useState('');
+
+  const [isEditModalVisible, setIsEditModalVisible] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<any>(null);
+
+  const [isActionModalVisible, setIsActionModalVisible] = useState(false);
+  const [actionTargetProduct, setActionTargetProduct] = useState<any>(null);
+
+  const [isAdvancedDeleteModalVisible, setIsAdvancedDeleteModalVisible] = useState(false);
+  const [isResetConfirmModalVisible, setIsResetConfirmModalVisible] = useState(false);
+
+  const [isQtyModalVisible, setIsQtyModalVisible] = useState(false);
+  const [qtyTargetProduct, setQtyTargetProduct] = useState<any>(null);
+  const [inputQuantity, setInputQuantity] = useState('');
+
+  const [notesList, setNotesList] = useState<any[]>([]);
+  const [isAddNoteModalVisible, setIsAddNoteModalVisible] = useState(false);
+  const [isEditNoteModalVisible, setIsEditNoteModalVisible] = useState(false);
+  const [isDeleteNoteModalVisible, setIsDeleteNoteModalVisible] = useState(false);
+  const [currentNote, setCurrentNote] = useState<any>(null);
+  const [newNoteTitle, setNewNoteTitle] = useState('');
+  const [newNoteContent, setNewNoteContent] = useState('');
+
+  const [profileName, setProfileName] = useState('Administrador Comercial');
+  const [profileImage, setProfileImage] = useState<string | null>(null);
+  const [isEditProfileModal, setIsEditProfileModal] = useState(false);
+
+  const [hoursOfDay, setHoursOfDay] = useState(
+    Array.from({ length: 24 }, (_, index) => ({
+      hour: index,
+      sellCount: 0,
+      sellMoney: 0,
+    }))
+  );
+
+  const mainTabsSequence = ['home', 'stock', 'notes', 'profile'];
+
+  // Manejo inteligente del botón "Atrás" físico/gestual de Android
+  useEffect(() => {
+    const backAction = () => {
+      if (isCategoryDropdownOpen) {
+        setIsCategoryDropdownOpen(false);
+        return true;
+      }
+      if (isSortDropdownOpen) {
+        setIsSortDropdownOpen(false);
+        return true;
+      }
+
+      if (isAddModalVisible) { setIsAddModalVisible(false); return true; }
+      if (isEditModalVisible) { setIsEditModalVisible(false); return true; }
+      if (isActionModalVisible) { setIsActionModalVisible(false); return true; }
+      if (isAdvancedDeleteModalVisible) { setIsAdvancedDeleteModalVisible(false); return true; }
+      if (isResetConfirmModalVisible) { setIsResetConfirmModalVisible(false); return true; }
+      if (isQtyModalVisible) { setIsQtyModalVisible(false); return true; }
+      if (isAddNoteModalVisible) { setIsAddNoteModalVisible(false); return true; }
+      if (isEditNoteModalVisible) { setIsEditNoteModalVisible(false); return true; }
+      if (isDeleteNoteModalVisible) { setIsDeleteNoteModalVisible(false); return true; }
+      if (isEditProfileModal) { setIsEditProfileModal(false); return true; }
+      if (isCalendarModalVisible) { setIsCalendarModalVisible(false); return true; }
+      if (isTourActive) { setIsTourActive(false); return true; }
+
+      if (currentTab !== 'home') {
+        setCurrentTab('home');
+        return true;
+      }
+
+      return false;
+    };
+
+    const backHandler = BackHandler.addEventListener('hardwareBackPress', backAction);
+    return () => backHandler.remove();
+  }, [
+    isCategoryDropdownOpen, isSortDropdownOpen, isAddModalVisible, isEditModalVisible,
+    isActionModalVisible, isAdvancedDeleteModalVisible, isResetConfirmModalVisible, isQtyModalVisible, 
+    isAddNoteModalVisible, isEditNoteModalVisible, isDeleteNoteModalVisible, isEditProfileModal, 
+    isCalendarModalVisible, isTourActive, currentTab
+  ]);
+
+  const handleSwipeGesture = (direction: 'left' | 'right') => {
+    if (
+      !hasCompletedOnboarding || isTourActive ||
+      isAddModalVisible || isEditModalVisible || isActionModalVisible || 
+      isAdvancedDeleteModalVisible || isResetConfirmModalVisible || isQtyModalVisible || isAddNoteModalVisible || 
+      isEditNoteModalVisible || isDeleteNoteModalVisible || isEditProfileModal ||
+      isCalendarModalVisible || currentTab === 'sell' || currentTab === 'lowStock' || currentTab === 'fullHistory'
+    ) {
+      return;
+    }
+
+    const currentIndex = mainTabsSequence.indexOf(currentTab);
+    if (currentIndex === -1) return;
+
+    if (direction === 'left' && currentIndex < mainTabsSequence.length - 1) {
+      Haptics.selectionAsync();
+      setCurrentTab(mainTabsSequence[currentIndex + 1] as any);
+    } else if (direction === 'right' && currentIndex > 0) {
+      Haptics.selectionAsync();
+      setCurrentTab(mainTabsSequence[currentIndex - 1] as any);
+    }
+  };
+
+  const staticPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gestureState) => {
+        return Math.abs(gestureState.dx) > 30 && Math.abs(gestureState.dy) < 20;
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        if (gestureState.dx > 40) handleSwipeGesture('right');
+        else if (gestureState.dx < -40) handleSwipeGesture('left');
+      },
+    })
+  ).current;
+
+  useEffect(() => {
+    const timeSyncInterval = setInterval(() => {
+      setDeviceHour(new Date().getHours());
+    }, 30000);
+    return () => clearInterval(timeSyncInterval);
+  }, []);
+
+  useEffect(() => {
+    if (!isLoading && hasCompletedOnboarding && currentTab === 'home') {
+      setTimeout(() => {
+        const targetX = Math.max(0, (deviceHour - 2) * 40);
+        sellScrollRef.current?.scrollTo({ x: targetX, animated: true });
+      }, 300);
+    }
+  }, [isLoading, hasCompletedOnboarding, currentTab]);
+
+  const triggerSplashScreenAndStart = async (shouldRunTour: boolean) => {
+    if (!setupUsername.trim()) return;
+    const cleanName = setupUsername.trim();
+    setProfileName(cleanName);
+    setIsDarkMode(setupThemeDark);
+    setHasCompletedOnboarding(true);
+
+    await saveDataToStorage(STORAGE_KEY_ONBOARDING, 'true');
+    await saveDataToStorage(STORAGE_KEY_USERNAME, cleanName);
+    await saveDataToStorage(STORAGE_KEY_THEME, setupThemeDark ? 'true' : 'false');
+
+    if (shouldRunTour) {
+      setTimeout(() => {
+        setTourStepIndex(0);
+        setIsTourActive(true);
+        setCurrentTab('home');
+      }, 300);
+    }
+  };
+
+  const handleTourNext = () => {
+    Haptics.selectionAsync();
+    if (tourStepIndex < tourSteps.length - 1) {
+      const nextIdx = tourStepIndex + 1;
+      setTourStepIndex(nextIdx);
+      setCurrentTab(tourSteps[nextIdx].tab as any);
+    } else {
+      setIsTourActive(false);
+      showCustomToast("🚀 ¡Tour finalizado! Ya puedes operar SEEDIUS.");
+    }
+  };
+
+  const handleTourSkip = () => {
+    Haptics.selectionAsync();
+    setIsTourActive(false);
+    showCustomToast("✨ Introducción omitida con éxito.");
+  };
+
+  const showCustomToast = (msg: string, actionCallback?: () => void) => {
+    setToastMessage(msg);
+    setToastAction(() => actionCallback || null);
+    Animated.timing(toastOpacity, { toValue: 1, duration: 300, useNativeDriver: true }).start();
+
+    setTimeout(() => {
+      Animated.timing(toastOpacity, { toValue: 0, duration: 300, useNativeDriver: true }).start(() => {
+        setToastMessage(null);
+        setToastAction(null);
+      });
+    }, 4000);
+  };
+
+  const getMaxMetricValue = () => {
+    let max = 30; 
+    hoursOfDay.forEach(h => { if (h.sellCount > max) max = h.sellCount; });
+    return Math.ceil(max / 15) * 15;
+  };
+
+  const dynamicMax = getMaxMetricValue();
+  const axisValues = [dynamicMax, Math.round(dynamicMax * 0.75), Math.round(dynamicMax * 0.5), Math.round(dynamicMax * 0.25), 0];
+
+  const pickImage = async () => {
+    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permissionResult.granted) return;
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsEditing: true,
+      aspect: [1, 1],
+      quality: 0.8,
+    });
+
+    if (!result.canceled && result.assets && result.assets.length > 0) {
+      const uri = result.assets[0].uri;
+      setProfileImage(uri);
+      await saveDataToStorage(STORAGE_KEY_PROFILE_IMG, uri);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+  };
+
+  const handleAddProduct = async () => {
+    if (!newProductName || !newProductPrice) return;
+    const finalCategory = newProductCategory.trim() || 'General';
+    const initialStock = parseInt(newProductStock) || 0;
+
+    let updatedCats = categories;
+    if (finalCategory !== 'General' && !categories.includes(finalCategory)) {
+      updatedCats = [...categories, finalCategory];
+      setCategories(updatedCats);
+      await saveDataToStorage(STORAGE_KEY_CATEGORIES, updatedCats);
+    }
+
+    const newProd = {
+      id: Date.now().toString(),
+      name: newProductName,
+      price: parseFloat(newProductPrice) || 0,
+      stock: initialStock,
+      initialStockRef: initialStock,
+      category: finalCategory,
+      salesHistory: Array.from({ length: 24 }, (_, i) => ({ 
+        hour: i, 
+        count: 0, 
+        money: 0, 
+        minutes: { q1: 0, q2: 0, q3: 0, q4: 0 } 
+      }))
+    };
+
+    const updatedProducts = [...products, newProd];
+    setProducts(updatedProducts);
+    await saveDataToStorage(STORAGE_KEY_PRODUCTS, updatedProducts);
+
+    const currentMinute = new Date().getMinutes();
+    const newLogItem = {
+      id: Date.now().toString(),
+      text: `Añadiste "${newProductName}" al estoc (${initialStock} un.)`,
+      type: 'Estoc',
+      time: `${deviceHour}:${String(currentMinute).padStart(2, '0')} hrs`
+    };
+
+    setDailyHistoryLogs(prev => {
+      const todayLogs = prev[currentDateString] || [];
+      const newHistory = { ...prev, [currentDateString]: [newLogItem, ...todayLogs] };
+      saveDataToStorage(STORAGE_KEY_HISTORY, newHistory);
+      return newHistory;
+    });
+
+    setNewProductName('');
+    setNewProductPrice('');
+    setNewProductCategory('');
+    setNewProductStock('');
+    setIsAddModalVisible(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const handleUpdateProduct = async () => {
+    if (!editingProduct.name || !editingProduct.price) return;
+    const finalCat = editingProduct.category.trim() || 'General';
+    let updatedCats = categories;
+    if (finalCat !== 'General' && !categories.includes(finalCat)) {
+      updatedCats = [...categories, finalCat];
+      setCategories(updatedCats);
+      await saveDataToStorage(STORAGE_KEY_CATEGORIES, updatedCats);
+    }
+
+    const newStock = parseInt(editingProduct.stock) || 0;
+    const updatedRef = newStock > editingProduct.initialStockRef ? newStock : editingProduct.initialStockRef;
+
+    const updated = { ...editingProduct, category: finalCat, stock: newStock, initialStockRef: updatedRef };
+    const updatedProducts = products.map(p => p.id === updated.id ? updated : p);
+    setProducts(updatedProducts);
+    await saveDataToStorage(STORAGE_KEY_PRODUCTS, updatedProducts);
+
+    const currentMinute = new Date().getMinutes();
+    const newLogItem = {
+      id: Date.now().toString(),
+      text: `Actualizaste "${updated.name}" (Stock: ${newStock} un.)`,
+      type: 'Estoc',
+      time: `${deviceHour}:${String(currentMinute).padStart(2, '0')} hrs`
+    };
+
+    setDailyHistoryLogs(prev => {
+      const todayLogs = prev[currentDateString] || [];
+      const newHistory = { ...prev, [currentDateString]: [newLogItem, ...todayLogs] };
+      saveDataToStorage(STORAGE_KEY_HISTORY, newHistory);
+      return newHistory;
+    });
+
+    setIsEditModalVisible(false);
+    setEditingProduct(null);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const executeAdvancedDelete = async (eraseAnalytics: boolean) => {
+    if (!actionTargetProduct) return;
+
+    const updatedProducts = products.filter(p => p.id !== actionTargetProduct.id);
+    setProducts(updatedProducts);
+    await saveDataToStorage(STORAGE_KEY_PRODUCTS, updatedProducts);
+
+    if (eraseAnalytics) {
+      const resetHours = Array.from({ length: 24 }, (_, index) => ({ hour: index, sellCount: 0, sellMoney: 0 }));
+      setHoursOfDay(resetHours);
+      await saveDataToStorage(STORAGE_KEY_HOURS, resetHours);
+      setTotalMoneyEarned(0);
+      await saveDataToStorage(STORAGE_KEY_MONEY, 0);
+    }
+
+    const currentMinute = new Date().getMinutes();
+    const newLogItem = {
+      id: Date.now().toString(),
+      text: eraseAnalytics ? `Eliminaste "${actionTargetProduct.name}" y purgaste analíticas` : `Eliminaste "${actionTargetProduct.name}" (manteniendo métricas)`,
+      type: 'Estoc',
+      time: `${deviceHour}:${String(currentMinute).padStart(2, '0')} hrs`
+    };
+
+    setDailyHistoryLogs(prev => {
+      const todayLogs = prev[currentDateString] || [];
+      const newHistory = { ...prev, [currentDateString]: [newLogItem, ...todayLogs] };
+      saveDataToStorage(STORAGE_KEY_HISTORY, newHistory);
+      return newHistory;
+    });
+
+    setIsAdvancedDeleteModalVisible(false);
+    setActionTargetProduct(null);
+    setExpandedProductId(null);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    showCustomToast(eraseAnalytics ? "🗑️ Producto y analíticas purgados." : "🛡️ Producto eliminado, métricas intactas.");
+  };
+
+  const confirmQuantityMovement = async () => {
+    const qty = parseInt(inputQuantity);
+    if (isNaN(qty) || qty <= 0) return;
+
+    if (qtyTargetProduct.stock < qty) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      showCustomToast("¡No tienes esa cantidad en el estoc!");
+      return;
+    }
+
+    const moneyTotal = qty * qtyTargetProduct.price;
+    const remainingStock = qtyTargetProduct.stock - qty;
+    const currentMinute = new Date().getMinutes();
+
+    let minuteKey = 'q1';
+    if (currentMinute >= 15 && currentMinute < 30) minuteKey = 'q2';
+    else if (currentMinute >= 30 && currentMinute < 45) minuteKey = 'q3';
+    else if (currentMinute >= 45) minuteKey = 'q4';
+
+    const updatedProducts = products.map(p => {
+      if (p.id === qtyTargetProduct.id) {
+        const updatedHistory = p.salesHistory ? p.salesHistory.map((h: any) => {
+          if (h.hour === deviceHour) {
+            const currentMins = h.minutes || { q1: 0, q2: 0, q3: 0, q4: 0 };
+            return { 
+              ...h, 
+              count: h.count + qty, 
+              money: h.money + moneyTotal,
+              minutes: { ...currentMins, [minuteKey]: currentMins[minuteKey] + qty }
+            };
+          }
+          return h;
+        }) : [];
+        return { ...p, stock: remainingStock, salesHistory: updatedHistory };
+      }
+      return p;
+    });
+
+    setProducts(updatedProducts);
+    await saveDataToStorage(STORAGE_KEY_PRODUCTS, updatedProducts);
+
+    const newTotalMoney = totalMoneyEarned + moneyTotal;
+    setTotalMoneyEarned(newTotalMoney);
+    await saveDataToStorage(STORAGE_KEY_MONEY, newTotalMoney);
+
+    const newHours = hoursOfDay.map(h => {
+      if (h.hour === deviceHour) {
+        return { ...h, sellCount: h.sellCount + qty, sellMoney: h.sellMoney + moneyTotal };
+      }
+      return h;
+    });
+    setHoursOfDay(newHours);
+    await saveDataToStorage(STORAGE_KEY_HOURS, newHours);
+
+    if (activeCandle && activeCandle.hour === deviceHour) {
+      const targetProd = updatedProducts.find(p => p.id === qtyTargetProduct.id);
+      const existingHistory = targetProd?.salesHistory?.find((h: any) => h.hour === deviceHour);
+      const updatedMins = existingHistory?.minutes ? { ...existingHistory.minutes, [minuteKey]: existingHistory.minutes[minuteKey] + qty } : { q1: 0, q2: 0, q3: 0, q4: qty };
+
+      const cHourFormatted = `${String(deviceHour).padStart(2, '0')}:00`;
+      const nextHFormatted = `${String((deviceHour + 1) % 24).padStart(2, '0')}:00`;
+      const q1Time = `${String(deviceHour).padStart(2, '0')}:15`;
+      const q2Time = `${String(deviceHour).padStart(2, '0')}:30`;
+      const q3Time = `${String(deviceHour).padStart(2, '0')}:45`;
+
+      setActiveCandle({
+        hour: deviceHour,
+        count: (activeCandle.count || 0) + qty,
+        money: (activeCandle.money || 0) + moneyTotal,
+        minutes: [
+          { time: `${cHourFormatted} - ${q1Time}`, count: updatedMins.q1 || 0, money: (updatedMins.q1 || 0) * qtyTargetProduct.price },
+          { time: `${q1Time} - ${q2Time}`, count: updatedMins.q2 || 0, money: (updatedMins.q2 || 0) * qtyTargetProduct.price },
+          { time: `${q2Time} - ${q3Time}`, count: updatedMins.q3 || 0, money: (updatedMins.q3 || 0) * qtyTargetProduct.price },
+          { time: `${q3Time} - ${nextHFormatted}`, count: updatedMins.q4 || 0, money: (updatedMins.q4 || 0) * qtyTargetProduct.price },
+        ]
+      });
+    }
+
+    const newLogItem = {
+      id: Date.now().toString(),
+      text: `Vendiste ${qty}x ${qtyTargetProduct.name} ($${moneyTotal.toFixed(2)})`,
+      type: 'Venta',
+      time: `${deviceHour}:${String(currentMinute).padStart(2, '0')} hrs`
+    };
+
+    setDailyHistoryLogs(prev => {
+      const todayLogs = prev[currentDateString] || [];
+      const newHistory = { ...prev, [currentDateString]: [newLogItem, ...todayLogs] };
+      saveDataToStorage(STORAGE_KEY_HISTORY, newHistory);
+      return newHistory;
+    });
+
+    const threshold = qtyTargetProduct.initialStockRef * 0.05;
+    if (remainingStock === 0) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+      showCustomToast(`🔴 ¡Se agotó "${qtyTargetProduct.name}" (0 un.)!`, () => setCurrentTab('lowStock'));
+    } else if (remainingStock <= threshold) {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Notification);
+      showCustomToast(`🟡 ¡Atención! "${qtyTargetProduct.name}" está casi acabado (${remainingStock} un.)`, () => setCurrentTab('lowStock'));
+    } else {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    }
+
+    setInputQuantity('');
+    setIsQtyModalVisible(false);
+  };
+
+  const handleAddNote = async () => {
+    if (!newNoteTitle && !newNoteContent) return;
+    const currentMinute = new Date().getMinutes();
+    const newNoteObj = { id: Date.now().toString(), title: newNoteTitle || 'Nota', content: newNoteContent };
+    const updatedNotes = [...notesList, newNoteObj];
+    setNotesList(updatedNotes);
+    await saveDataToStorage(STORAGE_KEY_NOTES, updatedNotes);
+
+    const newLogItem = {
+      id: Date.now().toString(),
+      text: `Creaste la nota "${newNoteTitle || 'Nota'}"`,
+      type: 'Notas',
+      time: `${deviceHour}:${String(currentMinute).padStart(2, '0')} hrs`
+    };
+
+    setDailyHistoryLogs(prev => {
+      const todayLogs = prev[currentDateString] || [];
+      const newHistory = { ...prev, [currentDateString]: [newLogItem, ...todayLogs] };
+      saveDataToStorage(STORAGE_KEY_HISTORY, newHistory);
+      return newHistory;
+    });
+
+    setNewNoteTitle('');
+    setNewNoteContent('');
+    setIsAddNoteModalVisible(false);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const handleUpdateNote = async () => {
+    if (!currentNote) return;
+    const updatedNotes = notesList.map(n => n.id === currentNote.id ? currentNote : n);
+    setNotesList(updatedNotes);
+    await saveDataToStorage(STORAGE_KEY_NOTES, updatedNotes);
+
+    setIsEditNoteModalVisible(false);
+    setCurrentNote(null);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  };
+
+  const executeDeleteNote = async () => {
+    if (!currentNote) return;
+    const updatedNotes = notesList.filter(n => n.id !== currentNote.id);
+    setNotesList(updatedNotes);
+    await saveDataToStorage(STORAGE_KEY_NOTES, updatedNotes);
+
+    setIsDeleteNoteModalVisible(false);
+    setIsEditNoteModalVisible(false);
+    setCurrentNote(null);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+  };
+
+  const lowStockProducts = products.filter(p => p.stock <= (p.initialStockRef * 0.05));
+
+  const getDaysForSelectedMonth = () => {
+    const year = calendarViewDate.getFullYear();
+    const month = calendarViewDate.getMonth();
+    const totalDays = new Date(year, month + 1, 0).getDate();
+    const daysList = [];
+    for (let i = 1; i <= totalDays; i++) {
+      const formattedDay = String(i).padStart(2, '0');
+      const formattedMonth = String(month + 1).padStart(2, '0');
+      const dateString = `${year}-${formattedMonth}-${formattedDay}`;
+      daysList.push({ dayNum: i, dateString });
+    }
+    return daysList;
+  };
+  const currentMonthDays = getDaysForSelectedMonth();
+
+  const handlePrevMonth = () => {
+    Haptics.selectionAsync();
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() - 1, 1));
+  };
+
+  const handleNextMonth = () => {
+    Haptics.selectionAsync();
+    setCalendarViewDate(new Date(calendarViewDate.getFullYear(), calendarViewDate.getMonth() + 1, 1));
+  };
+
+  const monthNames = [
+    "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", 
+    "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
+  ];
+
+  let processedProducts = selectedCategoryFilter === 'TODAS' 
+    ? [...products] 
+    : products.filter(p => p.category === selectedCategoryFilter);
+
+  if (selectedSortOption === 'Precio (Mayor a Menor)') processedProducts.sort((a, b) => b.price - a.price);
+  else if (selectedSortOption === 'Precio (Menor a Mayor)') processedProducts.sort((a, b) => a.price - b.price);
+  else if (selectedSortOption === 'Nombre (A-Z)') processedProducts.sort((a, b) => a.name.localeCompare(b.name));
+  else if (selectedSortOption === 'Estado: Estable') {
+    processedProducts.sort((a, b) => (a.stock > (a.initialStockRef * 0.05) ? 0 : 1) - (b.stock > (b.initialStockRef * 0.05) ? 0 : 1));
+  } else if (selectedSortOption === 'Estado: Poco') {
+    processedProducts.sort((a, b) => ((a.stock <= (a.initialStockRef * 0.05) && a.stock > 0) ? 0 : 1) - ((b.stock <= (b.initialStockRef * 0.05) && b.stock > 0) ? 0 : 1));
+  } else if (selectedSortOption === 'Estado: Agotado') {
+    processedProducts.sort((a, b) => (a.stock === 0 ? 0 : 1) - (b.stock === 0 ? 0 : 1));
+  }
+
+  const themeStyles = {
+    bg: isDarkMode ? '#09090b' : '#f4f4f5',
+    cardBg: isDarkMode ? '#121214' : '#ffffff',
+    textMain: isDarkMode ? '#ffffff' : '#09090b',
+    textSub: isDarkMode ? '#71717a' : '#71717a',
+    border: isDarkMode ? '#27272a' : '#e4e4e7',
+    inputBg: isDarkMode ? '#18181b' : '#f4f4f5',
+  };
+
+  if (isLoading) {
+    return (
+      <View style={[styles.splashContainer, {backgroundColor: '#09090b'}]}>
+        <Text style={[styles.splashLogo, {color: '#ffffff'}]}>SEEDIUS</Text>
+        <Text style={styles.splashOpeningSlogan}>¿Desorden?, Seedius</Text>
+      </View>
+    );
+  }
+
+  if (!hasCompletedOnboarding) {
+    return (
+      <SafeAreaView style={[styles.container, {backgroundColor: '#09090b', justifyContent: 'center', padding: 24}]}>
+        <View style={[styles.modalContent, {backgroundColor: '#121214', borderColor: '#27272a'}]}>
+          <Text style={[styles.splashLogo, {color: '#ffffff', textAlign: 'center', fontSize: 28}]}>SEEDIUS</Text>
+          <Text style={[styles.sectionSubtitle, {textAlign: 'center', marginBottom: 20}]}>
+            Sistema Integral de Ventas, Control de Estoc y Bitácora Comercial.
+          </Text>
+
+          {onboardingStep === 1 && (
+            <View>
+              <Text style={[styles.chartTitle, {color: '#ffffff', marginBottom: 6}]}>1. Configura tu Perfil</Text>
+              <TextInput 
+                style={[styles.modalInput, {backgroundColor: '#18181b', color: '#ffffff', borderColor: '#27272a'}]}
+                placeholder="Nombre de usuario"
+                placeholderTextColor="#71717a"
+                value={setupUsername}
+                onChangeText={setSetupUsername}
+              />
+
+              <Text style={[styles.chartTitle, {color: '#ffffff', marginTop: 10, marginBottom: 6}]}>2. Elige tu Tema Inicial</Text>
+              <View style={[styles.settingRowItem, {backgroundColor: '#18181b', borderColor: '#27272a', marginBottom: 16}]}>
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+                  <Ionicons name="moon-outline" size={18} color="#38bdf8" />
+                  <Text style={[styles.settingRowText, {color: '#ffffff'}]}>Tema Oscuro por defecto</Text>
+                </View>
+                <Switch 
+                  value={setupThemeDark} 
+                  onValueChange={setSetupThemeDark}
+                  trackColor={{ false: '#71717a', true: '#38bdf8' }}
+                  thumbColor={setupThemeDark ? '#ffffff' : '#f4f4f5'}
+                />
+              </View>
+
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#38bdf8', alignItems: 'center', paddingVertical: 14}]}
+                onPress={() => {
+                  if (setupUsername.trim()) {
+                    Haptics.selectionAsync();
+                    setOnboardingStep(2);
+                  }
+                }}
+              >
+                <Text style={{color: '#09090b', fontWeight: 'bold', fontSize: 14}}>Siguiente</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {onboardingStep === 2 && (
+            <View>
+              <Text style={[styles.chartTitle, {color: '#ffffff', marginBottom: 8}]}>3. Términos y Condiciones</Text>
+              <ScrollView style={styles.termsBoxScroll} showsVerticalScrollIndicator={false}>
+                <Text style={styles.termsTextContent}>
+                  Bienvenido a SEEDIUS. Al utilizar esta aplicación para la gestión de su estoc y ventas, usted acepta que todos los registros de la bitácora e historiales operativos se gestionan de forma segura en el almacenamiento interno de la app, con opción de reinicio completo en cualquier momento desde los Ajustes.
+                </Text>
+              </ScrollView>
+
+              <TouchableOpacity 
+                style={[styles.settingRowItem, {backgroundColor: '#18181b', borderColor: '#27272a', marginVertical: 14}]}
+                onPress={() => setAcceptedTerms(!acceptedTerms)}
+              >
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 10, flex: 1}}>
+                  <Ionicons name={acceptedTerms ? "checkbox" : "square-outline"} size={20} color="#38bdf8" />
+                  <Text style={[styles.settingRowText, {color: '#ffffff', fontSize: 12}]}>He leído y acepto los términos y condiciones</Text>
+                </View>
+              </TouchableOpacity>
+
+              <View style={{flexDirection: 'row', gap: 10, marginBottom: 12}}>
+                <TouchableOpacity 
+                  style={[styles.modalBtn, {backgroundColor: '#27272a', flex: 1, alignItems: 'center', paddingVertical: 12}]}
+                  onPress={() => setOnboardingStep(1)}
+                >
+                  <Text style={{color: '#fff', fontWeight: 'bold'}}>Atrás</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity 
+                  style={[styles.modalBtn, {backgroundColor: acceptedTerms ? '#38bdf8' : '#27272a', flex: 2, alignItems: 'center', paddingVertical: 12}]}
+                  disabled={!acceptedTerms}
+                  onPress={() => triggerSplashScreenAndStart(true)}
+                >
+                  <Text style={{color: acceptedTerms ? '#09090b' : '#71717a', fontWeight: 'bold', fontSize: 13}}>Ver Introducción</Text>
+                </TouchableOpacity>
+              </View>
+
+              <TouchableOpacity 
+                style={{alignItems: 'center', padding: 8}}
+                disabled={!acceptedTerms}
+                onPress={() => triggerSplashScreenAndStart(false)}
+              >
+                <Text style={{color: acceptedTerms ? '#71717a' : '#3f3f46', fontSize: 12, fontWeight: 'bold'}}>Saltar Introducción</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.container, {backgroundColor: themeStyles.bg}]}>
+      {toastMessage && (
+        <View style={styles.toastWrapperAbsolute}>
+          <TouchableOpacity 
+            activeOpacity={0.8}
+            onPress={() => {
+              if (toastAction) {
+                Haptics.selectionAsync();
+                toastAction();
+              }
+            }}
+          >
+            <Animated.View style={[
+              styles.toastContainer, 
+              {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border},
+              toastMessage.includes('🔴') ? {borderColor: '#ef4444'} : {borderColor: '#eab308'}
+            ]}>
+              <Ionicons name={toastMessage.includes('🔴') ? "alert-circle" : "warning"} size={20} color={toastMessage.includes('🔴') ? "#ef4444" : "#eab308"} />
+              <Text style={[styles.toastText, {color: themeStyles.textMain}]}>{toastMessage}</Text>
+            </Animated.View>
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {isTourActive && (
+        <View style={styles.tourOverlayContainer}>
+          <View style={[styles.tourCardBox, {backgroundColor: themeStyles.cardBg, borderColor: '#38bdf8'}]}>
+            <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8}}>
+              <Text style={[styles.tourStepIndicator, {color: '#38bdf8'}]}>Paso {tourStepIndex + 1} de {tourSteps.length}</Text>
+              <TouchableOpacity onPress={handleTourSkip}>
+                <Text style={{color: '#71717a', fontSize: 12, fontWeight: 'bold'}}>Omitir Tour</Text>
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={[styles.tourTitleText, {color: themeStyles.textMain}]}>{tourSteps[tourStepIndex].title}</Text>
+            <Text style={[styles.tourDescText, {color: themeStyles.textSub}]}>{tourSteps[tourStepIndex].desc}</Text>
+
+            <View style={{flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14, gap: 10}}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#38bdf8', paddingVertical: 10, paddingHorizontal: 20}]}
+                onPress={handleTourNext}
+              >
+                <Text style={{color: '#09090b', fontWeight: 'bold', fontSize: 13}}>
+                  {tourStepIndex === tourSteps.length - 1 ? '¡Comenzar!' : 'Siguiente'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      )}
+
+      <View style={[styles.header, {borderBottomColor: themeStyles.border}]} {...staticPanResponder.panHandlers}>
+        <View>
+          <Text style={[styles.appName, {color: themeStyles.textMain}]}>SEEDIUS</Text>
+          <Text style={styles.appSubtitle}>Sistema de Ventas y Estoc</Text>
+        </View>
+        <TouchableOpacity style={styles.headerProfileIcon} onPress={() => { Haptics.selectionAsync(); setCurrentTab('profile'); }}>
+          {profileImage ? (
+            <Image source={{ uri: profileImage }} style={styles.headerAvatarImg} />
+          ) : (
+            <Ionicons name="person-circle-outline" size={28} color="#38bdf8" />
+          )}
+        </TouchableOpacity>
+      </View>
+
+      {currentTab === 'home' && (
+        <ScrollView 
+          contentContainerStyle={styles.content}
+          onStartShouldSetResponder={() => {
+            setActiveCandle(null);
+            return false;
+          }}
+        >
+          <View style={styles.kpiContainer}>
+            <TouchableOpacity 
+              style={[styles.kpiCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}, lowStockProducts.length > 0 && {borderColor: '#eab308'}]}
+              onPress={() => {
+                if (lowStockProducts.length > 0) {
+                  Haptics.selectionAsync();
+                  setCurrentTab('lowStock');
+                }
+              }}
+            >
+              <Ionicons name="alert-circle" size={18} color={lowStockProducts.length > 0 ? '#eab308' : '#22c55e'} />
+              <View>
+                <Text style={styles.kpiTitle}>Alerta Estoc</Text>
+                <Text style={[styles.kpiValue, {color: themeStyles.textMain}]}>
+                  {lowStockProducts.length === 0 ? 'Saludable' : `${lowStockProducts.length} aviso(s)`}
+                </Text>
+              </View>
+            </TouchableOpacity>
+
+            <View style={[styles.kpiCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+              <Ionicons name="cash" size={18} color="#38bdf8" />
+              <View>
+                <Text style={styles.kpiTitle}>Dinero</Text>
+                <Text style={[styles.kpiValue, {color: '#38bdf8'}]}>${totalMoneyEarned.toFixed(2)}</Text>
+              </View>
+            </View>
+
+            <TouchableOpacity 
+              style={[styles.kpiCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setCurrentTab('stock');
+              }}
+            >
+              <Ionicons name="cube" size={18} color="#38bdf8" />
+              <View>
+                <Text style={styles.kpiTitle}>Catálogo</Text>
+                <Text style={[styles.kpiValue, {color: themeStyles.textMain}]}>{products.length} prod.</Text>
+              </View>
+            </TouchableOpacity>
+          </View>
+
+          <TouchableOpacity 
+            style={[styles.historyAccessCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setCurrentTab('fullHistory');
+            }}
+          >
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+              <View style={styles.historyIconCircle}>
+                <Ionicons name="calendar" size={18} color="#38bdf8" />
+              </View>
+              <View>
+                <Text style={[styles.historyAccessTitle, {color: themeStyles.textMain}]}>Historial y Bitácora General</Text>
+                <Text style={styles.historyAccessSubtitle}>Consulta inmutable con calendario y selector de mes</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#71717a" />
+          </TouchableOpacity>
+
+          <LinearGradient colors={isDarkMode ? ['#18181b', '#121214'] : ['#ffffff', '#f4f4f5']} style={[styles.chartCard, {borderColor: themeStyles.border}]}>
+            <Text style={[styles.chartTitle, {color: themeStyles.textMain}]}>Rendimiento Global de Ventas</Text>
+
+            <View style={styles.chartBodyRow}>
+              <View style={styles.axisYContainer}>
+                {axisValues.map((val, idx) => (
+                  <Text key={idx} style={styles.axisText}>{val}</Text>
+                ))}
+              </View>
+
+              <View style={styles.chartAreaWrapper}>
+                <View style={styles.gridLinesContainer}>
+                  {axisValues.slice(0, -1).map((_, i) => (
+                    <View key={i} style={[styles.gridLine, {backgroundColor: isDarkMode ? 'rgba(255, 255, 255, 0.05)' : 'rgba(0, 0, 0, 0.05)'}]} />
+                  ))}
+                </View>
+
+                <ScrollView ref={sellScrollRef} horizontal showsHorizontalScrollIndicator={false} style={styles.candlesScroll}>
+                  <View style={styles.candlesWrapper}>
+                    {hoursOfDay.map((item) => {
+                      const isCurrentHour = item.hour === deviceHour;
+                      const heightPx = Math.max(4, dynamicMax > 0 ? (item.sellCount / dynamicMax) * 110 : 4);
+                      const glowOpacity = Math.min(1, 0.3 + (heightPx / 110) * 0.5);
+                      const glowRadius = Math.round(4 + (heightPx / 110) * 6);
+                      const isSelected = activeCandle && activeCandle.hour === item.hour;
+
+                      const nextHourFormatted = `${String((item.hour + 1) % 24).padStart(2, '0')}:00`;
+                      const currentHourFormatted = `${String(item.hour).padStart(2, '0')}:00`;
+                      const quarterHour = `${String(item.hour).padStart(2, '0')}:15`;
+                      const halfHour = `${String(item.hour).padStart(2, '0')}:30`;
+                      const threeQuarterHour = `${String(item.hour).padStart(2, '0')}:45`;
+
+                      return (
+                        <TouchableOpacity
+                          key={item.hour}
+                          style={[styles.candleColumn, isCurrentHour && styles.highlightCurrentHour, isSelected && {backgroundColor: 'rgba(56, 189, 248, 0.2)'}]}
+                          onPress={() => {
+                            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                            
+                            let totalQ1 = 0, totalQ2 = 0, totalQ3 = 0, totalQ4 = 0;
+                            let moneyQ1 = 0, moneyQ2 = 0, moneyQ3 = 0, moneyQ4 = 0;
+
+                            products.forEach(prod => {
+                              const matchHour = prod.salesHistory?.find((sh: any) => sh.hour === item.hour);
+                              if (matchHour && matchHour.minutes) {
+                                totalQ1 += matchHour.minutes.q1 || 0;
+                                totalQ2 += matchHour.minutes.q2 || 0;
+                                totalQ3 += matchHour.minutes.q3 || 0;
+                                totalQ4 += matchHour.minutes.q4 || 0;
+
+                                moneyQ1 += (matchHour.minutes.q1 || 0) * prod.price;
+                                moneyQ2 += (matchHour.minutes.q2 || 0) * prod.price;
+                                moneyQ3 += (matchHour.minutes.q3 || 0) * prod.price;
+                                moneyQ4 += (matchHour.minutes.q4 || 0) * prod.price;
+                              }
+                            });
+
+                            setActiveCandle({
+                              hour: item.hour,
+                              count: item.sellCount,
+                              money: item.sellMoney,
+                              minutes: [
+                                { time: `${currentHourFormatted} - ${quarterHour}`, count: totalQ1, money: moneyQ1 },
+                                { time: `${quarterHour} - ${halfHour}`, count: totalQ2, money: moneyQ2 },
+                                { time: `${halfHour} - ${threeQuarterHour}`, count: totalQ3, money: moneyQ3 },
+                                { time: `${threeQuarterHour} - ${nextHourFormatted}`, count: totalQ4, money: moneyQ4 },
+                              ]
+                            });
+                          }}
+                        >
+                          <View 
+                            style={[
+                              styles.candleBar, 
+                              { 
+                                height: heightPx, 
+                                backgroundColor: isSelected ? (isDarkMode ? '#ffffff' : '#09090b') : '#38bdf8', 
+                                shadowColor: '#38bdf8', 
+                                shadowOpacity: glowOpacity, 
+                                shadowRadius: glowRadius,
+                                elevation: glowRadius 
+                              }
+                            ]} 
+                          />
+                          <Text style={[styles.hourLabelText, isCurrentHour && {color: '#38bdf8', fontWeight: 'bold'}]}>
+                            {item.hour}:00
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+              </View>
+            </View>
+          </LinearGradient>
+
+          {activeCandle === null ? (
+            <View style={[styles.emptyParticlePanel, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+              <Animated.View style={[styles.particleDot, { 
+                transform: [{ translateY: particleAnim.interpolate({ inputRange: [0, 1], outputRange: [40, -40] }) }],
+                opacity: particleAnim.interpolate({ inputRange: [0, 0.5, 1], outputRange: [0.2, 0.8, 0] }),
+                left: '20%'
+              }]} />
+              <Animated.View style={[styles.particleDot, { 
+                transform: [{ translateY: particleAnim.interpolate({ inputRange: [0, 1], outputRange: [50, -30] }) }],
+                opacity: particleAnim.interpolate({ inputRange: [0, 0.7, 1], outputRange: [0.1, 0.6, 0] }),
+                left: '50%'
+              }]} />
+              <Animated.View style={[styles.particleDot, { 
+                transform: [{ translateY: particleAnim.interpolate({ inputRange: [0, 1], outputRange: [30, -50] }) }],
+                opacity: particleAnim.interpolate({ inputRange: [0, 0.4, 1], outputRange: [0.3, 0.9, 0] }),
+                left: '80%'
+              }]} />
+
+              <Text style={[styles.emptyParticleText, {color: themeStyles.textMain}]}>selecciona una vela para mas detalles</Text>
+            </View>
+          ) : (
+            <LinearGradient colors={isDarkMode ? ['#18181b', '#121214'] : ['#ffffff', '#f4f4f5']} style={[styles.detailBoxMinutes, {borderColor: '#38bdf8'}]}>
+              <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10}}>
+                <Text style={[styles.chartTitle, {color: themeStyles.textMain}]}>Desglose por Minutos ({activeCandle.hour}:00 hrs)</Text>
+                <TouchableOpacity onPress={() => setActiveCandle(null)}>
+                  <Ionicons name="close-circle" size={20} color="#71717a" />
+                </TouchableOpacity>
+              </View>
+              
+              {activeCandle.minutes.map((minBlock: any, idx: number) => (
+                <View key={idx} style={[styles.minuteRowItem, {borderBottomColor: themeStyles.border}]}>
+                  <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+                    <Ionicons name="time-outline" size={14} color="#38bdf8" />
+                    <Text style={[styles.minuteTextTime, {color: themeStyles.textSub}]}>{minBlock.time}</Text>
+                  </View>
+                  <Text style={[styles.minuteTextValue, {color: themeStyles.textMain}]}>
+                    {minBlock.count} un. <Text style={{color: '#38bdf8'}}>(${minBlock.money.toFixed(2)})</Text>
+                  </Text>
+                </View>
+              ))}
+            </LinearGradient>
+          )}
+
+          <TouchableOpacity 
+            style={[styles.chartCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setSelectedHistoryDate(currentDateString);
+              setCurrentTab('fullHistory');
+            }}
+          >
+            <Text style={[styles.chartTitle, {color: themeStyles.textMain}]}>Actividad Reciente de Hoy (Toca para ver Bitácora)</Text>
+            {(!dailyHistoryLogs[currentDateString] || dailyHistoryLogs[currentDateString].length === 0) ? (
+              <Text style={styles.emptyFeedText}>No hay registros todavía hoy.</Text>
+            ) : (
+              dailyHistoryLogs[currentDateString].slice(0, 5).map((act: any) => (
+                <View key={act.id} style={[styles.feedItemRow, {borderBottomColor: themeStyles.border}]}>
+                  <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                    <Ionicons name="checkmark-circle" size={16} color="#38bdf8" />
+                    <Text style={[styles.feedItemText, {color: themeStyles.textSub}]}>{act.text}</Text>
+                  </View>
+                  <Text style={styles.feedItemTime}>{act.time}</Text>
+                </View>
+              ))
+            )}
+          </TouchableOpacity>
+        </ScrollView>
+      )}
+
+      {currentTab === 'fullHistory' && (
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 10}}>
+            <TouchableOpacity onPress={() => setCurrentTab('home')}>
+              <Ionicons name="arrow-back" size={24} color="#38bdf8" />
+            </TouchableOpacity>
+            <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Bitácora de Operaciones</Text>
+          </View>
+          <Text style={styles.sectionSubtitle}>Selecciona el día en el calendario interactivo.</Text>
+
+          <TouchableOpacity 
+            style={[styles.datePickerBtnTrigger, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}
+            onPress={() => {
+              Haptics.selectionAsync();
+              setIsCalendarModalVisible(true);
+            }}
+          >
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+              <View style={styles.historyIconCircle}>
+                <Ionicons name="calendar" size={18} color="#38bdf8" />
+              </View>
+              <View>
+                <Text style={[styles.historyAccessTitle, {color: themeStyles.textMain, fontSize: 13}]}>Fecha seleccionada:</Text>
+                <Text style={{color: '#38bdf8', fontSize: 14, fontWeight: 'bold', marginTop: 2}}>{selectedHistoryDate}</Text>
+              </View>
+            </View>
+            <Ionicons name="chevron-down" size={18} color="#71717a" />
+          </TouchableOpacity>
+
+          <Modal visible={isCalendarModalVisible} animationType="fade" transparent={true}>
+            <View style={styles.modalOverlay}>
+              <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border, width: '92%', maxHeight: '85%'}]}>
+                <Text style={[styles.modalTitle, {color: themeStyles.textMain, textAlign: 'center', marginBottom: 6}]}>Selecciona la Fecha</Text>
+
+                <View style={[styles.calendarMonthHeader, {backgroundColor: isDarkMode ? '#18181b' : '#e4e4e7', borderColor: themeStyles.border}]}>
+                  <TouchableOpacity onPress={handlePrevMonth} style={styles.monthNavBtn}>
+                    <Ionicons name="chevron-back" size={18} color="#38bdf8" />
+                  </TouchableOpacity>
+                  <Text style={[styles.monthNavTitle, {color: themeStyles.textMain}]}>
+                    {monthNames[calendarViewDate.getMonth()]} {calendarViewDate.getFullYear()}
+                  </Text>
+                  <TouchableOpacity onPress={handleNextMonth} style={styles.monthNavBtn}>
+                    <Ionicons name="chevron-forward" size={18} color="#38bdf8" />
+                  </TouchableOpacity>
+                </View>
+
+                <ScrollView contentContainerStyle={styles.calendarGridContainer} showsVerticalScrollIndicator={false}>
+                  {currentMonthDays.map((item) => {
+                    const isSelected = selectedHistoryDate === item.dateString;
+                    return (
+                      <TouchableOpacity
+                        key={item.dateString}
+                        style={[
+                          styles.calendarDayCell, 
+                          {backgroundColor: isDarkMode ? '#18181b' : '#f4f4f5', borderColor: themeStyles.border},
+                          isSelected && styles.calendarDayCellSelected
+                        ]}
+                        onPress={() => {
+                          Haptics.selectionAsync();
+                          setSelectedHistoryDate(item.dateString);
+                          setIsCalendarModalVisible(false);
+                        }}
+                      >
+                        <Text style={[styles.calendarDayNumText, {color: themeStyles.textMain}, isSelected && {color: '#fff', fontWeight: 'bold'}]}>
+                          {item.dayNum}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                <TouchableOpacity 
+                  style={[styles.modalBtn, {backgroundColor: isDarkMode ? '#27272a' : '#d4d4d8', marginTop: 14, alignItems: 'center'}]} 
+                  onPress={() => setIsCalendarModalVisible(false)}
+                >
+                  <Text style={{color: isDarkMode ? '#fff' : '#09090b', fontWeight: 'bold'}}>Cerrar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </Modal>
+
+          <View style={[styles.dateSelectedInfoBar, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Ionicons name="lock-closed-outline" size={14} color="#38bdf8" />
+            <Text style={{color: themeStyles.textSub, fontSize: 12}}>Mostrando registros protegidos de: <Text style={{color: '#38bdf8', fontWeight: 'bold'}}>{selectedHistoryDate}</Text></Text>
+          </View>
+
+          {(!dailyHistoryLogs[selectedHistoryDate] || dailyHistoryLogs[selectedHistoryDate].length === 0) ? (
+            <View style={[styles.emptyHistoryBox, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+              <Ionicons name="document-lock-outline" size={32} color="#52525b" />
+              <Text style={styles.emptyHistoryText}>No se registraron movimientos en la fecha seleccionada.</Text>
+            </View>
+          ) : (
+            dailyHistoryLogs[selectedHistoryDate].map((log: any) => (
+              <View key={log.id} style={[styles.immutableLogRow, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+                <View style={{flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1}}>
+                  <Ionicons name="lock-closed" size={14} color="#38bdf8" />
+                  <Text style={[styles.immutableLogText, {color: themeStyles.textMain}]}>{log.text}</Text>
+                </View>
+                <Text style={styles.immutableLogTime}>{log.time}</Text>
+              </View>
+            ))
+          )}
+        </ScrollView>
+      )}
+
+      {currentTab === 'lowStock' && (
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={{flexDirection: 'row', alignItems: 'center', marginBottom: 14, gap: 10}}>
+            <TouchableOpacity onPress={() => setCurrentTab('home')}>
+              <Ionicons name="arrow-back" size={24} color="#38bdf8" />
+            </TouchableOpacity>
+            <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Productos con Stock Crítico</Text>
+          </View>
+          <Text style={styles.sectionSubtitle}>Productos en amarillo (≤5% restante) o rojo (Agotados).</Text>
+
+          {lowStockProducts.length === 0 ? (
+            <Text style={styles.emptyFeedText}>¡Excelente! No hay productos con stock bajo en este momento.</Text>
+          ) : (
+            lowStockProducts.map((item) => {
+              const isOut = item.stock === 0;
+              return (
+                <TouchableOpacity 
+                  key={item.id} 
+                  style={[styles.productRow, {backgroundColor: themeStyles.cardBg, borderColor: isOut ? 'rgba(239, 68, 68, 0.5)' : 'rgba(234, 179, 8, 0.5)'}]}
+                  onPress={() => {
+                    Haptics.selectionAsync();
+                    setExpandedProductId(item.id);
+                    setCurrentTab('stock');
+                  }}
+                >
+                  <View style={{flex: 1}}>
+                    <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+                      <Text style={[styles.productName, {color: themeStyles.textMain}]}>{item.name}</Text>
+                      <View style={[styles.dotLowStock, {backgroundColor: isOut ? '#ef4444' : '#eab308'}]} />
+                    </View>
+                    <Text style={styles.productCategory}>{item.category} • ${item.price.toFixed(2)}</Text>
+                  </View>
+                  <View style={[styles.stockBadge, {backgroundColor: isDarkMode ? '#27272a' : '#e4e4e7'}]}>
+                    <Text style={[styles.stockBadgeText, {color: isOut ? '#f87171' : '#facc15'}]}>
+                      {isOut ? 'Agotado' : `${item.stock} un.`}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </ScrollView>
+      )}
+
+      {currentTab === 'stock' && (
+        <View style={{flex: 1}}>
+          <ScrollView contentContainerStyle={styles.content}>
+            <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Inventario General de Productos</Text>
+            <Text style={styles.sectionSubtitle}>Filtra por categoría u ordena los productos con el botón "Ver".</Text>
+            
+            <View style={styles.filterRowContainer}>
+              <View style={styles.filterColumn}>
+                <TouchableOpacity 
+                  style={[styles.categoryDropdownToggle, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]} 
+                  onPress={() => { setIsCategoryDropdownOpen(!isCategoryDropdownOpen); setIsSortDropdownOpen(false); }}
+                >
+                  <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+                    <Ionicons name="filter" size={14} color="#38bdf8" />
+                    <Text style={styles.categoryToggleText} numberOfLines={1}>
+                      Cat: <Text style={{color: themeStyles.textMain}}>{selectedCategoryFilter}</Text>
+                    </Text>
+                  </View>
+                  <Ionicons name={isCategoryDropdownOpen ? "chevron-up" : "chevron-down"} size={14} color="#71717a" />
+                </TouchableOpacity>
+
+                {isCategoryDropdownOpen && (
+                  <>
+                    <TouchableOpacity 
+                      style={styles.dropdownOutsideBackdrop} 
+                      activeOpacity={1} 
+                      onPress={() => setIsCategoryDropdownOpen(false)}
+                    />
+                    <View style={[styles.categoryDropdownList, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+                      <TouchableOpacity 
+                        style={[styles.categoryDropdownItem, {borderBottomColor: themeStyles.border}, selectedCategoryFilter === 'TODAS' && styles.categorySelected]}
+                        onPress={() => { setSelectedCategoryFilter('TODAS'); setIsCategoryDropdownOpen(false); }}
+                      >
+                        <Text style={[styles.categoryItemText, {color: themeStyles.textMain}]}>Ver Todo</Text>
+                      </TouchableOpacity>
+                      {categories.map((cat, idx) => (
+                        <TouchableOpacity 
+                          key={idx} 
+                          style={[styles.categoryDropdownItem, {borderBottomColor: themeStyles.border}, selectedCategoryFilter === cat && styles.categorySelected]}
+                          onPress={() => { setSelectedCategoryFilter(cat); setIsCategoryDropdownOpen(false); }}
+                        >
+                          <Text style={[styles.categoryItemText, {color: themeStyles.textMain}]}>{cat}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </View>
+
+              <View style={styles.filterColumn}>
+                <TouchableOpacity 
+                  style={[styles.categoryDropdownToggle, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]} 
+                  onPress={() => { setIsSortDropdownOpen(!isSortDropdownOpen); setIsCategoryDropdownOpen(false); }}
+                >
+                  <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+                    <Ionicons name="swap-vertical" size={14} color="#38bdf8" />
+                    <Text style={styles.categoryToggleText} numberOfLines={1}>
+                      Ver: <Text style={{color: themeStyles.textMain}}>{selectedSortOption}</Text>
+                    </Text>
+                  </View>
+                  <Ionicons name={isSortDropdownOpen ? "chevron-up" : "chevron-down"} size={14} color="#71717a" />
+                </TouchableOpacity>
+
+                {isSortDropdownOpen && (
+                  <>
+                    <TouchableOpacity 
+                      style={styles.dropdownOutsideBackdrop} 
+                      activeOpacity={1} 
+                      onPress={() => setIsSortDropdownOpen(false)}
+                    />
+                    <View style={[styles.categoryDropdownList, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+                      {[
+                        'Por Defecto',
+                        'Precio (Mayor a Menor)',
+                        'Precio (Menor a Mayor)',
+                        'Nombre (A-Z)',
+                        'Estado: Estable',
+                        'Estado: Poco',
+                        'Estado: Agotado'
+                      ].map((option, idx) => (
+                        <TouchableOpacity 
+                          key={idx} 
+                          style={[styles.categoryDropdownItem, {borderBottomColor: themeStyles.border}, selectedSortOption === option && styles.categorySelected]}
+                          onPress={() => { setSelectedSortOption(option); setIsSortDropdownOpen(false); }}
+                        >
+                          <Text style={[styles.categoryItemText, {color: themeStyles.textMain}]}>{option}</Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  </>
+                )}
+              </View>
+            </View>
+
+            {processedProducts.length === 0 ? (
+              <Text style={styles.emptyFeedText}>No hay productos registrados. Presiona "+" para añadir uno.</Text>
+            ) : (
+              processedProducts.map((item) => {
+                const isExpanded = expandedProductId === item.id;
+                const threshold = item.initialStockRef * 0.05;
+                const isOut = item.stock === 0;
+                const isWarning = item.stock <= threshold && !isOut;
+                const prodMax = item.salesHistory ? Math.max(10, ...item.salesHistory.map((s: any) => s.count)) : 10;
+
+                return (
+                  <View key={item.id} style={styles.productCardWrapper}>
+                    <TouchableOpacity 
+                      style={[
+                        styles.productRow, 
+                        {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border},
+                        isOut && {borderColor: 'rgba(239, 68, 68, 0.4)'},
+                        isWarning && {borderColor: 'rgba(234, 179, 8, 0.4)'},
+                        isExpanded && {borderColor: '#38bdf8', borderWidth: 1.5, shadowColor: '#38bdf8', shadowOpacity: 0.5, shadowRadius: 8, elevation: 6}
+                      ]}
+                      onPress={() => {
+                        Haptics.selectionAsync();
+                        setExpandedProductId(isExpanded ? null : item.id);
+                      }}
+                      onLongPress={() => {
+                        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+                        setActionTargetProduct(item);
+                        setIsActionModalVisible(true);
+                      }}
+                    >
+                      <View style={{flex: 1}}>
+                        <View style={{flexDirection: 'row', alignItems: 'center', gap: 6}}>
+                          <Text style={[styles.productName, {color: themeStyles.textMain}]}>{item.name}</Text>
+                          {(isOut || isWarning) && (
+                            <View style={[styles.dotLowStock, {backgroundColor: isOut ? '#ef4444' : '#eab308'}]} />
+                          )}
+                        </View>
+                        <Text style={styles.productCategory}>{item.category} • ${item.price.toFixed(2)}</Text>
+                      </View>
+
+                      <View style={{flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                        <TouchableOpacity 
+                          style={styles.directSellBtn}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            Haptics.selectionAsync();
+                            setQtyTargetProduct(item);
+                            setIsQtyModalVisible(true);
+                          }}
+                        >
+                          <Text style={styles.directSellText}>Vender</Text>
+                        </TouchableOpacity>
+
+                        <View style={[styles.stockBadge, {backgroundColor: isDarkMode ? '#27272a' : '#e4e4e7'}]}>
+                          <Text style={[
+                            styles.stockBadgeText, 
+                            isOut && {color: '#f87171'},
+                            isWarning && {color: '#facc15'},
+                            !isOut && !isWarning && {color: isDarkMode ? '#f4f4f5' : '#09090b'}
+                          ]}>
+                            {item.stock} un.
+                          </Text>
+                        </View>
+                        <Ionicons name={isExpanded ? "chevron-up" : "chevron-down"} size={16} color="#71717a" />
+                      </View>
+                    </TouchableOpacity>
+
+                    {isExpanded && (
+                      <LinearGradient colors={isDarkMode ? ['#18181b', '#121214'] : ['#ffffff', '#f4f4f5']} style={[styles.expandedChartCard, {borderColor: '#38bdf8'}]}>
+                        <Text style={[styles.chartTitle, {color: themeStyles.textMain}]}>Rendimiento de {item.name}</Text>
+                        <View style={styles.chartBodyRow}>
+                          <View style={styles.axisYContainer}>
+                            {[prodMax, Math.round(prodMax * 0.5), 0].map((val, idx) => (
+                              <Text key={idx} style={styles.axisText}>{val}</Text>
+                            ))}
+                          </View>
+                          <View style={styles.chartAreaWrapper}>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.candlesScroll}>
+                              <View style={styles.candlesWrapper}>
+                                {item.salesHistory && item.salesHistory.map((sh: any) => {
+                                  const heightPx = Math.max(4, (sh.count / prodMax) * 90);
+                                  return (
+                                    <View key={sh.hour} style={styles.candleColumn}>
+                                      <View style={[styles.candleBar, { height: heightPx, backgroundColor: '#38bdf8' }]} />
+                                      <Text style={styles.hourLabelText}>{sh.hour}:00</Text>
+                                    </View>
+                                  );
+                                })}
+                              </View>
+                            </ScrollView>
+                          </View>
+                        </View>
+                      </LinearGradient>
+                    )}
+                  </View>
+                );
+              })
+            )}
+          </ScrollView>
+        </View>
+      )}
+
+      {currentTab === 'notes' && (
+        <ScrollView contentContainerStyle={styles.content}>
+          <View style={{flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16}}>
+            <View>
+              <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Bloc de Notas</Text>
+              <Text style={styles.sectionSubtitle}>Haz clic en cualquier nota para editarla con un toque.</Text>
+            </View>
+            <TouchableOpacity 
+              style={styles.addNoteIconBtn}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setIsAddNoteModalVisible(true);
+              }}
+            >
+              <Ionicons name="add" size={22} color="#fff" />
+            </TouchableOpacity>
+          </View>
+
+          {notesList.map((note) => (
+            <TouchableOpacity 
+              key={note.id} 
+              style={[styles.noteItemCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}
+              onPress={() => {
+                Haptics.selectionAsync();
+                setCurrentNote(note);
+                setIsEditNoteModalVisible(true);
+              }}
+            >
+              <Text style={[styles.noteItemTitle, {color: themeStyles.textMain}]}>{note.title}</Text>
+              <Text style={[styles.noteItemContent, {color: themeStyles.textSub}]}>{note.content}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      )}
+
+      {currentTab === 'sell' && (
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Terminal General de Ventas ($)</Text>
+          <Text style={styles.sectionSubtitle}>Selecciona el producto para registrar cantidades exactas.</Text>
+
+          {products.map((item) => (
+            <View key={item.id} style={[styles.sellCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+              <View>
+                <Text style={[styles.productName, {color: themeStyles.textMain}]}>{item.name}</Text>
+                <Text style={styles.productStock}>Stock disponible: {item.stock}</Text>
+              </View>
+              <View style={styles.sellActionsRow}>
+                <TouchableOpacity 
+                  style={styles.actionSellBtn}
+                  onPress={() => {
+                    setQtyTargetProduct(item);
+                    setIsQtyModalVisible(true);
+                  }}
+                >
+                  <Text style={styles.actionBtnText}>Vender</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ))}
+        </ScrollView>
+      )}
+
+      {currentTab === 'profile' && (
+        <ScrollView contentContainerStyle={styles.content}>
+          <Text style={[styles.sectionHeaderTitle, {color: themeStyles.textMain}]}>Configuración de la App</Text>
+          <Text style={styles.sectionSubtitle}>Ajustes de entorno, tema y preferencias del sistema SEEDIUS.</Text>
+
+          <View style={[styles.profileCard, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <TouchableOpacity onPress={pickImage} style={styles.avatarContainer}>
+              {profileImage ? (
+                <Image source={{ uri: profileImage }} style={styles.avatarImg} />
+              ) : (
+                <View style={[styles.avatarPlaceholder, {backgroundColor: themeStyles.inputBg}]}>
+                  <Ionicons name="person" size={40} color="#38bdf8" />
+                </View>
+              )}
+              <View style={styles.cameraIconBadge}>
+                <Ionicons name="camera" size={14} color="#fff" />
+              </View>
+            </TouchableOpacity>
+
+            <Text style={[styles.profileName, {color: themeStyles.textMain}]}>{profileName}</Text>
+            
+            <TouchableOpacity 
+              style={[styles.modalBtn, {backgroundColor: '#27272a', marginTop: 14}]}
+              onPress={() => setIsEditProfileModal(true)}
+            >
+              <Text style={{color: '#fff', fontSize: 13, fontWeight: 'bold'}}>Editar Nombre</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={[styles.chartTitle, {color: themeStyles.textMain, marginTop: 10, marginBottom: 8}]}>Apariencia</Text>
+          <View style={[styles.settingRowItem, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+              <Ionicons name="moon-outline" size={18} color="#38bdf8" />
+              <Text style={[styles.settingRowText, {color: themeStyles.textMain}]}>Tema Oscuro / Tema Claro</Text>
+            </View>
+            <Switch 
+              value={isDarkMode} 
+              onValueChange={async (val) => {
+                Haptics.selectionAsync();
+                setIsDarkMode(val);
+                await saveDataToStorage(STORAGE_KEY_THEME, val ? 'true' : 'false');
+              }}
+              trackColor={{ false: '#71717a', true: '#38bdf8' }}
+              thumbColor={isDarkMode ? '#ffffff' : '#f4f4f5'}
+            />
+          </View>
+
+          <Text style={[styles.chartTitle, {color: themeStyles.textMain, marginTop: 14, marginBottom: 8}]}>Ayuda & Tutoriales</Text>
+          <TouchableOpacity 
+            style={[styles.settingActionRow, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]} 
+            onPress={() => {
+              Haptics.selectionAsync();
+              setTourStepIndex(0);
+              setIsTourActive(true);
+              setCurrentTab('home');
+            }}
+          >
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+              <Ionicons name="help-circle-outline" size={18} color="#38bdf8" />
+              <Text style={[styles.settingRowText, {color: themeStyles.textMain}]}>Ver Introducción / Tour de la App</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#71717a" />
+          </TouchableOpacity>
+
+          <Text style={[styles.chartTitle, {color: themeStyles.textMain, marginTop: 14, marginBottom: 8}]}>Sistema & Almacenamiento</Text>
+          
+          <TouchableOpacity 
+            style={[styles.settingActionRow, {backgroundColor: themeStyles.cardBg, borderColor: '#ef4444'}]} 
+            onPress={() => {
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+              setIsResetConfirmModalVisible(true);
+            }}
+          >
+            <View style={{flexDirection: 'row', alignItems: 'center', gap: 10}}>
+              <Ionicons name="trash-bin" size={18} color="#ef4444" />
+              <Text style={[styles.settingRowText, {color: '#ef4444'}]}>Borrar y Restablecer Todo el Historial</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#71717a" />
+          </TouchableOpacity>
+        </ScrollView>
+      )}
+
+      <View style={styles.floatingActionsVertical}>
+        <Animated.View style={{ transform: [{ scale: scaleAddBtn }] }}>
+          <TouchableOpacity 
+            style={styles.floatingBtnAdd} 
+            onPress={() => {
+              triggerButtonAnimation(scaleAddBtn);
+              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+              setCurrentTab('stock');
+              setIsAddModalVisible(true);
+            }}
+          >
+            <Ionicons name="add" size={24} color="#fff" />
+          </TouchableOpacity>
+        </Animated.View>
+
+        <Animated.View style={{ transform: [{ scale: scaleSellBtn }] }}>
+          <TouchableOpacity 
+            style={styles.floatingBtnSell} 
+            onPress={() => {
+              triggerButtonAnimation(scaleSellBtn);
+              Haptics.selectionAsync();
+              setCurrentTab('sell');
+            }}
+          >
+            <Text style={styles.sellBtnText}>$</Text>
+          </TouchableOpacity>
+        </Animated.View>
+      </View>
+
+      <View style={[styles.bottomNav, {backgroundColor: isDarkMode ? '#0f0f11' : '#ffffff', borderTopColor: themeStyles.border}]} {...staticPanResponder.panHandlers}>
+        <TouchableOpacity style={styles.navItem} onPress={() => { Haptics.selectionAsync(); setCurrentTab('home'); }}>
+          <Ionicons name="stats-chart" size={18} color={currentTab === 'home' ? '#38bdf8' : '#71717a'} />
+          <Text style={[styles.navLabel, currentTab === 'home' && styles.activeLabel]}>Panel</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.navItem} onPress={() => { Haptics.selectionAsync(); setCurrentTab('stock'); }}>
+          <Ionicons name="layers" size={18} color={currentTab === 'stock' ? '#38bdf8' : '#71717a'} />
+          <Text style={[styles.navLabel, currentTab === 'stock' && styles.activeLabel]}>Estoc</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.navItem} onPress={() => { Haptics.selectionAsync(); setCurrentTab('notes'); }}>
+          <Ionicons name="document-text" size={18} color={currentTab === 'notes' ? '#38bdf8' : '#71717a'} />
+          <Text style={[styles.navLabel, currentTab === 'notes' && styles.activeLabel]}>Notas</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity style={styles.navItem} onPress={() => { Haptics.selectionAsync(); setCurrentTab('profile'); }}>
+          <Ionicons name="settings" size={18} color={currentTab === 'profile' ? '#38bdf8' : '#71717a'} />
+          <Text style={[styles.navLabel, currentTab === 'profile' && styles.activeLabel]}>Ajustes</Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Modal de confirmación para borrar historial desde ajustes */}
+      <Modal visible={isResetConfirmModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: '#ef4444'}]}>
+            <Text style={[styles.modalTitle, {color: '#ef4444'}]}>⚠️ ¿Reiniciar SEEDIUS?</Text>
+            <Text style={[styles.sectionSubtitle, {marginBottom: 20, color: themeStyles.textMain}]}>
+              Esto borrará todo el catálogo, notas, analíticas y registros de la bitácora de forma permanente. La app volverá a iniciar desde cero.
+            </Text>
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#27272a'}]} 
+                onPress={() => setIsResetConfirmModalVisible(false)}
+              >
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#ef4444'}]} 
+                onPress={() => {
+                  setIsResetConfirmModalVisible(false);
+                  handleResetAppHistory();
+                }}
+              >
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Sí, Borrar Todo</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isAddModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>Añadir Nuevo Producto</Text>
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Nombre del producto" placeholderTextColor="#71717a" value={newProductName} onChangeText={setNewProductName} />
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Precio ($)" placeholderTextColor="#71717a" keyboardType="numeric" value={newProductPrice} onChangeText={setNewProductPrice} />
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Categoría" placeholderTextColor="#71717a" value={newProductCategory} onChangeText={setNewProductCategory} />
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Stock inicial" placeholderTextColor="#71717a" keyboardType="numeric" value={newProductStock} onChangeText={setNewProductStock} />
+
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsAddModalVisible(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={handleAddProduct}>
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isActionModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>{actionTargetProduct?.name}</Text>
+            <Text style={styles.sectionSubtitle}>¿Qué acción deseas realizar?</Text>
+            <TouchableOpacity style={[styles.actionMenuBtn, {backgroundColor: themeStyles.inputBg, borderColor: themeStyles.border}]} onPress={() => { setIsActionModalVisible(false); setQtyTargetProduct(actionTargetProduct); setIsQtyModalVisible(true); }}>
+              <Ionicons name="cash" size={18} color="#38bdf8" />
+              <Text style={[styles.actionMenuText, {color: themeStyles.textMain}]}>Vender producto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionMenuBtn, {backgroundColor: themeStyles.inputBg, borderColor: themeStyles.border}]} onPress={() => { setIsActionModalVisible(false); setEditingProduct(actionTargetProduct); setIsEditModalVisible(true); }}>
+              <Ionicons name="pencil" size={18} color="#38bdf8" />
+              <Text style={[styles.actionMenuText, {color: themeStyles.textMain}]}>Editar propiedades y categoría</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.actionMenuBtn, {backgroundColor: themeStyles.inputBg, borderColor: '#ef4444'}]} onPress={() => { setIsActionModalVisible(false); setIsAdvancedDeleteModalVisible(true); }}>
+              <Ionicons name="trash" size={18} color="#ef4444" />
+              <Text style={[styles.actionMenuText, {color: '#ef4444'}]}>Eliminar producto</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a', marginTop: 10, alignItems: 'center'}]} onPress={() => setIsActionModalVisible(false)}>
+              <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isAdvancedDeleteModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>⚠️ Gestión de Datos al Eliminar</Text>
+            <Text style={[styles.sectionSubtitle, {marginBottom: 16}]}>
+              ¿Qué deseas hacer con los efectos y analíticas acumuladas de este producto en toda la app?
+            </Text>
+
+            <View style={{flexDirection: 'row', gap: 10, marginBottom: 12}}>
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#ef4444', flex: 1, alignItems: 'center', paddingVertical: 12}]}
+                onPress={() => executeAdvancedDelete(true)}
+              >
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Borrar</Text>
+                <Text style={{color: '#fecaca', fontSize: 10, marginTop: 2}}>Eliminar métricas y app</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity 
+                style={[styles.modalBtn, {backgroundColor: '#22c55e', flex: 1, alignItems: 'center', paddingVertical: 12}]}
+                onPress={() => executeAdvancedDelete(false)}
+              >
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Mantener</Text>
+                <Text style={{color: '#064e3b', fontSize: 10, marginTop: 2}}>Conservar datos históricos</Text>
+              </TouchableOpacity>
+            </View>
+
+            <TouchableOpacity 
+              style={[styles.modalBtn, {backgroundColor: '#27272a', alignItems: 'center'}]}
+              onPress={() => setIsAdvancedDeleteModalVisible(false)}
+            >
+              <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isEditModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>✏️ Editar Producto</Text>
+            {editingProduct && (
+              <>
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Nombre" placeholderTextColor="#71717a" value={editingProduct.name} onChangeText={(val) => setEditingProduct({...editingProduct, name: val})} />
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Precio" placeholderTextColor="#71717a" keyboardType="numeric" value={editingProduct.price.toString()} onChangeText={(val) => setEditingProduct({...editingProduct, price: parseFloat(val) || 0})} />
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Categoría" placeholderTextColor="#71717a" value={editingProduct.category} onChangeText={(val) => setEditingProduct({...editingProduct, category: val})} />
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Stock" placeholderTextColor="#71717a" keyboardType="numeric" value={editingProduct.stock.toString()} onChangeText={(val) => setEditingProduct({...editingProduct, stock: parseInt(val) || 0})} />
+              </>
+            )}
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsEditModalVisible(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={handleUpdateProduct}>
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Actualizar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isQtyModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>Registrar Venta</Text>
+            <Text style={styles.sectionSubtitle}>{qtyTargetProduct?.name} (Stock disponible: {qtyTargetProduct?.stock})</Text>
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Cantidad a vender..." placeholderTextColor="#71717a" keyboardType="numeric" value={inputQuantity} onChangeText={setInputQuantity} />
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsQtyModalVisible(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={confirmQuantityMovement}>
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Confirmar Venta</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isAddNoteModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>Nueva Nota</Text>
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Título de la nota" placeholderTextColor="#71717a" value={newNoteTitle} onChangeText={setNewNoteTitle} />
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}, {height: 100, textAlignVertical: 'top'}]} multiline placeholder="Escribe tu apunte..." placeholderTextColor="#71717a" value={newNoteContent} onChangeText={setNewNoteContent} />
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsAddNoteModalVisible(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={handleAddNote}>
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Guardar Nota</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isEditNoteModalVisible} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>Editar Nota</Text>
+            {currentNote && (
+              <>
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Título" placeholderTextColor="#71717a" value={currentNote.title} onChangeText={(val) => setCurrentNote({...currentNote, title: val})} />
+                <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}, {height: 100, textAlignVertical: 'top'}]} multiline placeholder="Contenido" placeholderTextColor="#71717a" value={currentNote.content} onChangeText={(val) => setCurrentNote({...currentNote, content: val})} />
+              </>
+            )}
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#ef4444'}]} onPress={() => setIsDeleteNoteModalVisible(true)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Eliminar</Text>
+              </TouchableOpacity>
+              <View style={{flexDirection: 'row', gap: 10}}>
+                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsEditNoteModalVisible(false)}>
+                  <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={handleUpdateNote}>
+                  <Text style={{color: '#09090b', fontWeight: 'bold'}}>Actualizar</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isDeleteNoteModalVisible} animationType="fade" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>⚠️ ¿Eliminar Nota?</Text>
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsDeleteNoteModalVisible(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#ef4444'}]} onPress={executeDeleteNote}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Sí, Eliminar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={isEditProfileModal} animationType="slide" transparent={true}>
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modalContent, {backgroundColor: themeStyles.cardBg, borderColor: themeStyles.border}]}>
+            <Text style={[styles.modalTitle, {color: themeStyles.textMain}]}>Editar Nombre de Administrador</Text>
+            <TextInput style={[styles.modalInput, {backgroundColor: themeStyles.inputBg, color: themeStyles.textMain, borderColor: themeStyles.border}]} placeholder="Nombre de usuario" placeholderTextColor="#71717a" value={profileName} onChangeText={setProfileName} />
+            <View style={styles.modalButtonsRow}>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#27272a'}]} onPress={() => setIsEditProfileModal(false)}>
+                <Text style={{color: '#fff', fontWeight: 'bold'}}>Cerrar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={[styles.modalBtn, {backgroundColor: '#38bdf8'}]} onPress={async () => { 
+                setIsEditProfileModal(false); 
+                await saveDataToStorage(STORAGE_KEY_USERNAME, profileName);
+                Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success); 
+              }}>
+                <Text style={{color: '#09090b', fontWeight: 'bold'}}>Guardar</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </SafeAreaView>
+  );
+}
+
+const styles = StyleSheet.create({
+  container: { flex: 1 },
+  splashContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 24 },
+  splashLogo: { fontSize: 36, fontWeight: '900', letterSpacing: 2, marginBottom: 8 },
+  splashOpeningSlogan: { color: '#38bdf8', fontSize: 14, fontWeight: '700', letterSpacing: 1.5, textTransform: 'uppercase' },
+  
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 16, paddingTop: 14, paddingBottom: 12, borderBottomWidth: 1 },
+  appName: { fontSize: 20, fontWeight: '900', letterSpacing: 1 },
+  appSubtitle: { color: '#71717a', fontSize: 11 },
+  headerProfileIcon: { padding: 4 },
+  headerAvatarImg: { width: 32, height: 32, borderRadius: 16 },
+
+  toastWrapperAbsolute: { position: 'absolute', top: 60, left: 0, right: 0, alignItems: 'center', zIndex: 9999, elevation: 99 },
+  toastContainer: { borderWidth: 1, paddingHorizontal: 16, paddingVertical: 12, borderRadius: 12, flexDirection: 'row', alignItems: 'center', gap: 8, shadowOpacity: 0.6, shadowRadius: 8, elevation: 10 },
+  toastText: { fontSize: 13, fontWeight: 'bold' },
+
+  tourOverlayContainer: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.75)', justifyContent: 'center', alignItems: 'center', zIndex: 9999, padding: 24 },
+  tourCardBox: { width: '100%', borderRadius: 16, padding: 20, borderWidth: 2, shadowOpacity: 0.5, shadowRadius: 10, elevation: 15 },
+  tourStepIndicator: { fontSize: 11, fontWeight: 'bold', textTransform: 'uppercase', letterSpacing: 1 },
+  tourTitleText: { fontSize: 18, fontWeight: 'bold', marginBottom: 6 },
+  tourDescText: { fontSize: 13, lineHeight: 18 },
+
+  content: { padding: 16, paddingBottom: 120 },
+
+  kpiContainer: { flexDirection: 'row', gap: 8, marginBottom: 14 },
+  kpiCard: { flex: 1, borderRadius: 12, padding: 10, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 8 },
+  kpiTitle: { color: '#71717a', fontSize: 9, fontWeight: 'bold' },
+  kpiValue: { fontSize: 11, fontWeight: 'bold', marginTop: 2 },
+
+  historyAccessCard: { borderRadius: 14, padding: 14, borderWidth: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 },
+  historyIconCircle: { width: 36, height: 36, borderRadius: 18, backgroundColor: 'rgba(56, 189, 248, 0.1)', justifyContent: 'center', alignItems: 'center' },
+  historyAccessTitle: { fontSize: 14, fontWeight: 'bold' },
+  historyAccessSubtitle: { color: '#71717a', fontSize: 11, marginTop: 2 },
+
+  termsBoxScroll: { maxHeight: 140, backgroundColor: '#18181b', borderRadius: 8, padding: 10, borderWidth: 1, borderColor: '#27272a', marginBottom: 6 },
+  termsTextContent: { color: '#a1a1aa', fontSize: 11, lineHeight: 16 },
+
+  datePickerBtnTrigger: { borderRadius: 12, padding: 14, borderWidth: 1, marginBottom: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  calendarMonthHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 10, marginBottom: 12, borderWidth: 1 },
+  monthNavBtn: { padding: 6 },
+  monthNavTitle: { fontSize: 14, fontWeight: 'bold' },
+  calendarGridContainer: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, justifyContent: 'center', paddingBottom: 10 },
+  calendarDayCell: { width: 38, height: 38, borderRadius: 8, justifyContent: 'center', alignItems: 'center', borderWidth: 1 },
+  calendarDayCellSelected: { backgroundColor: '#38bdf8', borderColor: '#38bdf8' },
+  calendarDayNumText: { fontSize: 13 },
+
+  dateSelectedInfoBar: { flexDirection: 'row', alignItems: 'center', gap: 8, padding: 12, borderRadius: 10, borderWidth: 1, marginBottom: 14 },
+  immutableLogRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 12, borderRadius: 10, marginBottom: 8, borderWidth: 1 },
+  immutableLogText: { fontSize: 12, fontWeight: '500' },
+  immutableLogTime: { color: '#71717a', fontSize: 10 },
+  emptyHistoryBox: { padding: 30, alignItems: 'center', justifyContent: 'center', borderRadius: 12, borderWidth: 1 },
+  emptyHistoryText: { color: '#71717a', fontSize: 12, textAlign: 'center', marginTop: 10 },
+
+  chartCard: { borderRadius: 16, padding: 14, marginBottom: 14, borderWidth: 1 },
+  expandedChartCard: { borderRadius: 12, padding: 12, marginTop: 8, borderWidth: 1 },
+  chartTitle: { fontSize: 14, fontWeight: 'bold', marginBottom: 10 },
+  
+  chartBodyRow: { flexDirection: 'row', alignItems: 'flex-end' },
+  axisYContainer: { width: 35, height: 130, justifyContent: 'space-between', paddingRight: 4, alignItems: 'flex-end', paddingBottom: 16 },
+  axisText: { color: '#71717a', fontSize: 9, fontWeight: '600' },
+
+  chartAreaWrapper: { flex: 1, height: 145, position: 'relative' },
+  gridLinesContainer: { position: 'absolute', top: 0, left: 0, right: 0, height: 130, justifyContent: 'space-between', paddingBottom: 16 },
+  gridLine: { height: 1, width: '100%' },
+
+  candlesScroll: { flex: 1, height: 145 },
+  candlesWrapper: { flexDirection: 'row', alignItems: 'flex-end', height: 130, gap: 10, paddingHorizontal: 4 },
+  candleColumn: { width: 30, height: '100%', justifyContent: 'flex-end', alignItems: 'center', paddingBottom: 16, borderRadius: 8 },
+  highlightCurrentHour: { backgroundColor: 'rgba(56, 189, 248, 0.08)' },
+  
+  candleBar: { width: 6, borderRadius: 2 },
+  hourLabelText: { color: '#52525b', fontSize: 9, marginTop: 4, position: 'absolute', bottom: 0 },
+
+  emptyParticlePanel: { height: 100, borderRadius: 14, borderWidth: 1, justifyContent: 'center', alignItems: 'center', marginBottom: 14, overflow: 'hidden', position: 'relative' },
+  particleDot: { position: 'absolute', width: 4, height: 4, borderRadius: 2, backgroundColor: '#38bdf8', bottom: 10 },
+  emptyParticleText: { fontSize: 12, fontWeight: '500', letterSpacing: 0.5 },
+
+  detailBoxMinutes: { padding: 14, borderRadius: 14, marginBottom: 14, borderWidth: 1 },
+  minuteRowItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1 },
+  minuteTextTime: { fontSize: 12, fontWeight: '500' },
+  minuteTextValue: { fontSize: 12, fontWeight: 'bold' },
+
+  emptyFeedText: { color: '#71717a', fontSize: 12, fontStyle: 'italic' },
+  feedItemRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 6, borderBottomWidth: 1 },
+  feedItemText: { fontSize: 12, fontWeight: '500' },
+  feedItemTime: { color: '#71717a', fontSize: 10 },
+
+  sectionHeaderTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 4 },
+  sectionSubtitle: { color: '#71717a', fontSize: 12, marginBottom: 16 },
+
+  filterRowContainer: { flexDirection: 'row', gap: 8, marginBottom: 14, zIndex: 5 },
+  filterColumn: { flex: 1, position: 'relative' },
+  dropdownOutsideBackdrop: { position: 'absolute', top: -1000, left: -1000, right: -1000, bottom: -1000, zIndex: 1 },
+  categoryDropdownToggle: { borderWidth: 1, padding: 10, borderRadius: 10, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', zIndex: 2 },
+  categoryToggleText: { color: '#71717a', fontSize: 12 },
+  categoryDropdownList: { position: 'absolute', top: 45, left: 0, right: 0, borderWidth: 1, borderRadius: 10, overflow: 'hidden', zIndex: 10 },
+  categoryDropdownItem: { padding: 10, borderBottomWidth: 1 },
+  categorySelected: { backgroundColor: 'rgba(56, 189, 248, 0.15)' },
+  categoryItemText: { fontSize: 12, fontWeight: '500' },
+
+  productCardWrapper: { marginBottom: 10 },
+  productRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderRadius: 12, borderWidth: 1 },
+  productName: { fontSize: 14, fontWeight: '600' },
+  productCategory: { color: '#71717a', fontSize: 11, marginTop: 2 },
+  
+  directSellBtn: { backgroundColor: '#38bdf8', paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8 },
+  directSellText: { color: '#09090b', fontSize: 11, fontWeight: 'bold' },
+
+  stockBadge: { paddingHorizontal: 8, paddingVertical: 6, borderRadius: 8 },
+  stockBadgeText: { fontSize: 11, fontWeight: 'bold' },
+  dotLowStock: { width: 6, height: 6, borderRadius: 3, backgroundColor: '#eab308' },
+
+  addNoteIconBtn: { width: 36, height: 36, borderRadius: 18, backgroundColor: '#38bdf8', justifyContent: 'center', alignItems: 'center' },
+  noteItemCard: { padding: 16, borderRadius: 12, marginBottom: 10, borderWidth: 1 },
+  noteItemTitle: { fontSize: 15, fontWeight: 'bold', marginBottom: 4 },
+  noteItemContent: { fontSize: 13 },
+
+  sellCard: { padding: 14, borderRadius: 12, marginBottom: 10, borderWidth: 1, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  productStock: { color: '#38bdf8', fontSize: 12, marginTop: 4, fontWeight: '600' },
+  sellActionsRow: { flexDirection: 'row', gap: 8 },
+  actionSellBtn: { backgroundColor: '#38bdf8', paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8 },
+  actionBtnText: { color: '#09090b', fontSize: 12, fontWeight: 'bold' },
+
+  profileCard: { padding: 20, borderRadius: 14, alignItems: 'center', marginBottom: 14, borderWidth: 1 },
+  avatarContainer: { position: 'relative', marginBottom: 10 },
+  avatarPlaceholder: { width: 70, height: 70, borderRadius: 35, justifyContent: 'center', alignItems: 'center' },
+  avatarImg: { width: 70, height: 70, borderRadius: 35 },
+  cameraIconBadge: { position: 'absolute', bottom: 0, right: 0, backgroundColor: '#38bdf8', width: 22, height: 22, borderRadius: 11, justifyContent: 'center', alignItems: 'center', borderWidth: 2, borderColor: '#121214' },
+  profileName: { fontSize: 16, fontWeight: 'bold' },
+
+  settingRowItem: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  settingActionRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 10 },
+  settingRowText: { fontSize: 13, fontWeight: '600' },
+
+  floatingActionsVertical: { position: 'absolute', bottom: 65, right: 16, flexDirection: 'column', gap: 10, zIndex: 10 },
+  floatingBtnAdd: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#38bdf8', justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3 },
+  floatingBtnSell: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#22c55e', justifyContent: 'center', alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOpacity: 0.3, shadowRadius: 3 },
+  sellBtnText: { color: '#09090b', fontSize: 18, fontWeight: 'bold' },
+
+  bottomNav: { 
+    position: 'absolute', bottom: 0, left: 0, right: 0, height: 52, 
+    flexDirection: 'row', borderTopWidth: 1,
+    paddingBottom: Platform.OS === 'ios' ? 8 : 0,
+    justifyContent: 'space-around', alignItems: 'center'
+  },
+  navItem: { flex: 1, height: '100%', justifyContent: 'center', alignItems: 'center' },
+  navLabel: { color: '#71717a', fontSize: 10, marginTop: 2 },
+  activeLabel: { color: '#38bdf8', fontWeight: 'bold' },
+
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'center', padding: 20 },
+  modalContent: { borderRadius: 16, padding: 20, borderWidth: 1 },
+  modalTitle: { fontSize: 18, fontWeight: 'bold', marginBottom: 16 },
+  modalInput: { padding: 12, borderRadius: 10, marginBottom: 12, fontSize: 14, borderWidth: 1 },
+  modalButtonsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 10 },
+  modalBtn: { paddingVertical: 10, paddingHorizontal: 16, borderRadius: 10 },
+
+  actionMenuBtn: { flexDirection: 'row', alignItems: 'center', gap: 10, padding: 14, borderRadius: 10, marginBottom: 10, borderWidth: 1 },
+  actionMenuText: { fontSize: 14, fontWeight: '600' },
+});
